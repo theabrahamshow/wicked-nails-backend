@@ -1,7 +1,7 @@
 const express = require('express')
 const rateLimit = require('express-rate-limit')
 const crypto = require('crypto')
-const request = require('request')
+const axios = require('axios')
 const OpenAI = require('openai')
 require('path')
 require('assert')
@@ -391,86 +391,98 @@ async function postVisionApi (payload) {
     Authorization: `Bearer ${apiKey}`
   }
 
-  return new Promise((resolve, reject) => {
-    request.post({
-      url: chatUrl,
-      headers,
-      json: payload
-    }, (error, response, body) => {
-      if (error) {
-        console.error('Error:', error)
-        return reject(error)
-      } else {
-        if (response) {
-          console.log(`ℹ️ Remaing requests for API KEY: ${response.headers['x-ratelimit-remaining-requests']}`)
-          console.log(`⏰ Remaing time until rate limit resets for API KEY: ${response.headers['x-ratelimit-reset-requests']}`)
+  try {
+    const response = await axios.post(chatUrl, payload, { headers })
 
-          // Use the commented code to send alerts over Telegram when the API rate limit exceeded.
+    if (response) {
+      console.log(`ℹ️ Remaing requests for API KEY: ${response.headers['x-ratelimit-remaining-requests']}`)
+      console.log(`⏰ Remaing time until rate limit resets for API KEY: ${response.headers['x-ratelimit-reset-requests']}`)
 
-          // if (response.headers['x-ratelimit-remaining-requests']) {
-          //   const remainingRequests = response.headers['x-ratelimit-remaining-requests']
-          //   let telegramMessage
+      // Use the commented code to send alerts over Telegram when the API rate limit exceeded.
 
-          //   if (remainingRequests === 0) {
-          //     telegramMessage = `🚨 ALERT: OpenAI API Key doesn't have enough requests available.`
-          //     sendTelegram(telegramMessage)
-          //   } else if (remainingRequests === 10) {
-          //     telegramMessage = `☣️ WARNING: OpenAI API Key has ${remainingRequests} remaining requests.`
-          //     sendTelegram(telegramMessage)
-          //   }
-          // }
+      // if (response.headers['x-ratelimit-remaining-requests']) {
+      //   const remainingRequests = response.headers['x-ratelimit-remaining-requests']
+      //   let telegramMessage
+
+      //   if (remainingRequests === 0) {
+      //     telegramMessage = `🚨 ALERT: OpenAI API Key doesn't have enough requests available.`
+      //     sendTelegram(telegramMessage)
+      //   } else if (remainingRequests === 10) {
+      //     telegramMessage = `☣️ WARNING: OpenAI API Key has ${remainingRequests} remaining requests.`
+      //     sendTelegram(telegramMessage)
+      //   }
+      // }
+    }
+
+    const body = response.data
+
+    try {
+      console.log(body)
+      console.log(`Image result received and consumed total tokens: ${body.usage.total_tokens}`)
+    } catch (error) {
+      console.log('The JSON response does not contain total_tokens property. Another response?')
+      // If it is not a proper response, check if it is an error response like this
+      // {
+      // error: {
+      //   message: 'Your input image may contain content that is not allowed by our safety system.',
+      //   type: 'invalid_request_error',
+      //   param: null,
+      //   code: 'content_policy_violation'
+      // }
+      // }
+
+      try {
+        if (body.error) {
+          console.log('Error response from OpenAI API: ', body.error.message)
+          const errorCode = body.error.code
+          console.log('With code: ', errorCode)
+
+          throw new Error(errorCode)
+        } else {
+          throw new Error(body)
         }
-
-        try {
-          console.log(body)
-          console.log(`Image result received and consumed total tokens: ${body.usage.total_tokens}`)
-        } catch (error) {
-          console.log('The JSON response does not contain total_tokens property. Another response?')
-          // If it is not a proper response, check if it is an error response like this
-          // {
-          // error: {
-          //   message: 'Your input image may contain content that is not allowed by our safety system.',
-          //   type: 'invalid_request_error',
-          //   param: null,
-          //   code: 'content_policy_violation'
-          // }
-          // }
-
-          try {
-            if (body.error) {
-              console.log('Error response from OpenAI API: ', body.error.message)
-              const errorCode = body.error.code
-              console.log('With code: ', errorCode)
-
-              return reject(new Error(errorCode))
-            } else {
-              return reject(new Error(body))
-            }
-          } catch (error) {
-            console.error('Error accessing properties of error object from OpenAI API: ', error)
-            return reject(error)
-          }
-        }
-
-        try {
-          const parsedMarkDownString = removeMarkdownJsonSyntax(body.choices[0].message.content)
-          const jsonResponse = JSON.parse(parsedMarkDownString)
-          console.log(jsonResponse)
-          resolve(jsonResponse)
-        } catch (e) {
-          console.log(body)
-
-          try {
-            console.log(body.choices[0])
-          } catch {
-            console.log('There is no choices property in the object response from OpenAI')
-          }
-          console.error('Error parsing JSON:', e)
-          reject(e)
-        }
+      } catch (err) {
+        console.error('Error accessing properties of error object from OpenAI API: ', err)
+        throw err
       }
-    })
-  })
+    }
+
+    try {
+      const parsedMarkDownString = removeMarkdownJsonSyntax(body.choices[0].message.content)
+      const jsonResponse = JSON.parse(parsedMarkDownString)
+      console.log(jsonResponse)
+      return jsonResponse
+    } catch (e) {
+      console.log(body)
+
+      try {
+        console.log(body.choices[0])
+      } catch {
+        console.log('There is no choices property in the object response from OpenAI')
+      }
+      console.error('Error parsing JSON:', e)
+      throw e
+    }
+  } catch (error) {
+    if (error.response) {
+      const body = error.response.data
+      try {
+        if (body.error) {
+          console.log('Error response from OpenAI API: ', body.error.message)
+          const errorCode = body.error.code
+          console.log('With code: ', errorCode)
+          throw new Error(errorCode)
+        } else {
+          throw new Error(body)
+        }
+      } catch (err) {
+        console.error('Error accessing properties of error object from OpenAI API: ', err)
+        throw err
+      }
+    }
+    console.error('Error:', error)
+    throw error
+  }
 }
 
 async function postChatgptApi (payload) {
@@ -479,88 +491,100 @@ async function postChatgptApi (payload) {
     Authorization: `Bearer ${apiKey}`
   }
 
-  return new Promise((resolve, reject) => {
-    request.post({
-      url: chatUrl,
-      headers,
-      json: payload
-    }, (error, response, body) => {
-      if (error) {
-        console.error('Error:', error)
-        return reject(error)
-      } else {
-        if (response) {
-          console.log(`ℹ️ Remaing requests for API KEY: ${response.headers['x-ratelimit-remaining-requests']}`)
-          console.log(`⏰ Remaing time until rate limit resets for API KEY: ${response.headers['x-ratelimit-reset-requests']}`)
+  try {
+    const response = await axios.post(chatUrl, payload, { headers })
 
-          // Use the commented code to send alerts over Telegram when the API rate limit exceeded.
+    if (response) {
+      console.log(`ℹ️ Remaing requests for API KEY: ${response.headers['x-ratelimit-remaining-requests']}`)
+      console.log(`⏰ Remaing time until rate limit resets for API KEY: ${response.headers['x-ratelimit-reset-requests']}`)
 
-          // if (response.headers['x-ratelimit-remaining-requests']) {
-          //   const remainingRequests = response.headers['x-ratelimit-remaining-requests']
-          //   let telegramMessage
+      // Use the commented code to send alerts over Telegram when the API rate limit exceeded.
 
-          //   if (remainingRequests === 0) {
-          //     telegramMessage = `🚨 ALERT: OpenAI API Key doesn't have enough requests available.`
-          //     sendTelegram(telegramMessage)
-          //   } else if (remainingRequests === 10) {
-          //     telegramMessage = `☣️ WARNING: OpenAI API Key has ${remainingRequests} remaining requests.`
-          //     sendTelegram(telegramMessage)
-          //   }
-          // }
+      // if (response.headers['x-ratelimit-remaining-requests']) {
+      //   const remainingRequests = response.headers['x-ratelimit-remaining-requests']
+      //   let telegramMessage
+
+      //   if (remainingRequests === 0) {
+      //     telegramMessage = `🚨 ALERT: OpenAI API Key doesn't have enough requests available.`
+      //     sendTelegram(telegramMessage)
+      //   } else if (remainingRequests === 10) {
+      //     telegramMessage = `☣️ WARNING: OpenAI API Key has ${remainingRequests} remaining requests.`
+      //     sendTelegram(telegramMessage)
+      //   }
+      // }
+    }
+
+    const body = response.data
+
+    try {
+      // Uncomment for debug API response
+      // console.log(body)
+      console.log(`ChatGPT response received and consumed total tokens: ${body.usage.total_tokens}`)
+    } catch (error) {
+      console.log('The JSON response does not contain total_tokens property. Another response?')
+      // If it is not a proper response, check if it is an error response like this
+      // {
+      // error: {
+      //   message: 'Your input image may contain content that is not allowed by our safety system.',
+      //   type: 'invalid_request_error',
+      //   param: null,
+      //   code: 'content_policy_violation'
+      // }
+      // }
+
+      try {
+        if (body.error) {
+          console.log('Error response from OpenAI API: ', body.error.message)
+          const errorCode = body.error.code
+          console.log('With code: ', errorCode)
+
+          throw new Error(errorCode)
+        } else {
+          throw new Error(body)
         }
-
-        try {
-          // Uncomment for debug API response
-          // console.log(body)
-          console.log(`ChatGPT response received and consumed total tokens: ${body.usage.total_tokens}`)
-        } catch (error) {
-          console.log('The JSON response does not contain total_tokens property. Another response?')
-          // If it is not a proper response, check if it is an error response like this
-          // {
-          // error: {
-          //   message: 'Your input image may contain content that is not allowed by our safety system.',
-          //   type: 'invalid_request_error',
-          //   param: null,
-          //   code: 'content_policy_violation'
-          // }
-          // }
-
-          try {
-            if (body.error) {
-              console.log('Error response from OpenAI API: ', body.error.message)
-              const errorCode = body.error.code
-              console.log('With code: ', errorCode)
-
-              return reject(new Error(errorCode))
-            } else {
-              return reject(new Error(body))
-            }
-          } catch (error) {
-            console.error('Error accessing properties of error object from OpenAI API: ', error)
-            return reject(error)
-          }
-        }
-
-        try {
-          const chatgptResponse = {
-            message: body.choices[0].message.content
-          }
-          console.log(chatgptResponse)
-          resolve(chatgptResponse)
-        } catch (e) {
-          console.log(body)
-
-          try {
-            console.log(body.choices[0])
-          } catch {
-            console.log('There is no choices property in the object response from OpenAI')
-          }
-          console.error('Error parsing JSON:', e)
-          reject(e)
-        }
+      } catch (err) {
+        console.error('Error accessing properties of error object from OpenAI API: ', err)
+        throw err
       }
-    })
-  })
+    }
+
+    try {
+      const chatgptResponse = {
+        message: body.choices[0].message.content
+      }
+      console.log(chatgptResponse)
+      return chatgptResponse
+    } catch (e) {
+      console.log(body)
+
+      try {
+        console.log(body.choices[0])
+      } catch {
+        console.log('There is no choices property in the object response from OpenAI')
+      }
+      console.error('Error parsing JSON:', e)
+      throw e
+    }
+  } catch (error) {
+    if (error.response) {
+      const body = error.response.data
+      try {
+        if (body.error) {
+          console.log('Error response from OpenAI API: ', body.error.message)
+          const errorCode = body.error.code
+          console.log('With code: ', errorCode)
+          throw new Error(errorCode)
+        } else {
+          throw new Error(body)
+        }
+      } catch (err) {
+        console.error('Error accessing properties of error object from OpenAI API: ', err)
+        throw err
+      }
+    }
+    console.error('Error:', error)
+    throw error
+  }
 }
 
 async function postDalleApi (payload) {
@@ -569,42 +593,51 @@ async function postDalleApi (payload) {
     Authorization: `Bearer ${apiKey}`
   }
 
-  return new Promise((resolve, reject) => {
-    request.post({
-      url: dalleUrl,
-      headers,
-      json: payload
-    }, (error, response, body) => {
-      if (error) {
-        console.error('Error:', error)
-        return reject(error)
-      } else {
-        try {
-          if (body.error) {
-            console.log('Error response from OpenAI API: ', body.error.message)
-            const errorCode = body.error.code
-            console.log('With code: ', errorCode)
+  try {
+    const response = await axios.post(dalleUrl, payload, { headers })
+    const body = response.data
 
-            return reject(new Error(errorCode))
-          }
-        } catch (error) {
-          console.error('Error accessing properties of error object from OpenAI API: ', error)
-          return reject(error)
-        }
+    try {
+      if (body.error) {
+        console.log('Error response from OpenAI API: ', body.error.message)
+        const errorCode = body.error.code
+        console.log('With code: ', errorCode)
 
-        try {
-          const dalleResponse = {
-            imageUrl: body.data[0].url
-          }
-          console.log(dalleResponse)
-          resolve(dalleResponse)
-        } catch (e) {
-          console.log(body)
-          reject(e)
-        }
+        throw new Error(errorCode)
       }
-    })
-  })
+    } catch (error) {
+      console.error('Error accessing properties of error object from OpenAI API: ', error)
+      throw error
+    }
+
+    try {
+      const dalleResponse = {
+        imageUrl: body.data[0].url
+      }
+      console.log(dalleResponse)
+      return dalleResponse
+    } catch (e) {
+      console.log(body)
+      throw e
+    }
+  } catch (error) {
+    if (error.response) {
+      const body = error.response.data
+      try {
+        if (body.error) {
+          console.log('Error response from OpenAI API: ', body.error.message)
+          const errorCode = body.error.code
+          console.log('With code: ', errorCode)
+          throw new Error(errorCode)
+        }
+      } catch (err) {
+        console.error('Error accessing properties of error object from OpenAI API: ', err)
+        throw err
+      }
+    }
+    console.error('Error:', error)
+    throw error
+  }
 }
 
 async function postGptImageApi (payload) {
@@ -613,42 +646,51 @@ async function postGptImageApi (payload) {
     Authorization: `Bearer ${apiKey}`
   }
 
-  return new Promise((resolve, reject) => {
-    request.post({
-      url: dalleUrl,
-      headers,
-      json: payload
-    }, (error, response, body) => {
-      if (error) {
-        console.error('Error:', error)
-        return reject(error)
-      } else {
-        try {
-          if (body.error) {
-            console.log('Error response from OpenAI API: ', body.error.message)
-            const errorCode = body.error.code
-            console.log('With code: ', errorCode)
+  try {
+    const response = await axios.post(dalleUrl, payload, { headers })
+    const body = response.data
 
-            return reject(new Error(errorCode))
-          }
-        } catch (error) {
-          console.error('Error accessing properties of error object from OpenAI API: ', error)
-          return reject(error)
-        }
+    try {
+      if (body.error) {
+        console.log('Error response from OpenAI API: ', body.error.message)
+        const errorCode = body.error.code
+        console.log('With code: ', errorCode)
 
-        try {
-          const imageResponse = {
-            imageBase64: body.data[0].b64_json
-          }
-          console.log(imageResponse)
-          resolve(imageResponse)
-        } catch (e) {
-          console.log(body)
-          reject(e)
-        }
+        throw new Error(errorCode)
       }
-    })
-  })
+    } catch (error) {
+      console.error('Error accessing properties of error object from OpenAI API: ', error)
+      throw error
+    }
+
+    try {
+      const imageResponse = {
+        imageBase64: body.data[0].b64_json
+      }
+      console.log(imageResponse)
+      return imageResponse
+    } catch (e) {
+      console.log(body)
+      throw e
+    }
+  } catch (error) {
+    if (error.response) {
+      const body = error.response.data
+      try {
+        if (body.error) {
+          console.log('Error response from OpenAI API: ', body.error.message)
+          const errorCode = body.error.code
+          console.log('With code: ', errorCode)
+          throw new Error(errorCode)
+        }
+      } catch (err) {
+        console.error('Error accessing properties of error object from OpenAI API: ', err)
+        throw err
+      }
+    }
+    console.error('Error:', error)
+    throw error
+  }
 }
 
 // ANTHROPIC CLAUDE
@@ -696,32 +738,24 @@ app.post('/anthropic-messages', async (req, res) => {
       return res.status(400).json({ error: 'Invalid request body' })
     }
 
-    const options = {
-      url: anthropicMessagesUrl,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      json: {
-        model,
-        max_tokens: ANTHROPIC_MAX_TOKENS,
-        messages
-      }
-    }
+    try {
+      const response = await axios.post(
+        anthropicMessagesUrl,
+        {
+          model,
+          max_tokens: ANTHROPIC_MAX_TOKENS,
+          messages
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01'
+          }
+        }
+      )
 
-    request(options, (error, response, body) => {
-      if (error) {
-        console.error('Error calling Anthropic API:', error)
-        return res.status(500).json({ error: 'An error occurred while processing your request' })
-      }
-
-      if (response.statusCode !== 200) {
-        console.error('Anthropic API returned non-200 status:', body)
-        return res.status(response.statusCode).json({ error: 'Error from Anthropic API' })
-      }
-
+      const body = response.data
       const claudeResponse = body.content[0].text
 
       if (req.body.prompt) {
@@ -738,7 +772,14 @@ app.post('/anthropic-messages', async (req, res) => {
           res.status(500).json({ error: 'An error occurred while parsing Anthropic response' })
         }
       }
-    })
+    } catch (error) {
+      if (error.response) {
+        console.error('Anthropic API returned non-200 status:', error.response.data)
+        return res.status(error.response.status).json({ error: 'Error from Anthropic API' })
+      }
+      console.error('Error calling Anthropic API:', error)
+      return res.status(500).json({ error: 'An error occurred while processing your request' })
+    }
   } catch (error) {
     console.error('Error calling Anthropic API:', error.response?.data || error.message)
     res.status(500).json({ error: 'An error occurred while processing your request' })
