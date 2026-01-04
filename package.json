@@ -4,6 +4,8 @@
   "description": "Backend for WrapFast",
   "main": "wrapfast_backend.js",
   "scripts": {
+    "start": "node wrapfast_backend.js",
+    "dev": "node wrapfast_backend.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -20,6 +22,7 @@
   },
   "homepage": "https://github.com/juanjovn/wrapfast-backend#readme",
   "dependencies": {
+    "@google/genai": "^1.34.0",
     "axios": "^1.12.2",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
