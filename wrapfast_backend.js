@@ -616,7 +616,8 @@ CRITICAL CONSTRAINTS:
 // Instagram Media Extraction Endpoint
 // Uses HikerAPI to get full-resolution Instagram images
 // Expects: { url: String (Instagram post URL) }
-// Returns: { success: Boolean, imageUrl: String, width: Number, height: Number }
+// Returns: { success: Boolean, images: [{url, width, height}], isCarousel: Boolean }
+// For single images, also returns imageUrl/width/height for backwards compatibility
 app.post('/instagram-media', async (req, res) => {
   try {
     const { url } = req.body
@@ -649,14 +650,56 @@ app.post('/instagram-media', async (req, res) => {
 
       const mediaData = hikerResponse.data
 
-      // Extract the highest resolution image
-      // image_versions array is sorted by resolution (highest first)
+      // Check if this is a carousel post (multiple images)
+      if (mediaData.carousel_media && mediaData.carousel_media.length > 0) {
+        const images = []
+        
+        for (const item of mediaData.carousel_media) {
+          // Each carousel item can be an image or video
+          if (item.image_versions && item.image_versions.length > 0) {
+            const bestImage = item.image_versions[0]
+            images.push({
+              url: bestImage.url,
+              width: bestImage.width,
+              height: bestImage.height,
+              isVideo: false
+            })
+          } else if (item.video_versions && item.video_versions.length > 0) {
+            // For videos in carousel, try to get thumbnail if available
+            // Skip videos for now as we want nail images
+            console.log('Skipping video in carousel')
+          }
+        }
+
+        if (images.length > 0) {
+          console.log(`✅ Found Instagram carousel with ${images.length} images`)
+          return res.json({
+            success: true,
+            isCarousel: true,
+            images: images,
+            // For backwards compatibility, also include first image as main
+            imageUrl: images[0].url,
+            width: images[0].width,
+            height: images[0].height
+          })
+        }
+      }
+
+      // Single image post
       if (mediaData.image_versions && mediaData.image_versions.length > 0) {
         const bestImage = mediaData.image_versions[0]
         console.log(`✅ Found Instagram image: ${bestImage.width}x${bestImage.height}`)
 
         return res.json({
           success: true,
+          isCarousel: false,
+          images: [{
+            url: bestImage.url,
+            width: bestImage.width,
+            height: bestImage.height,
+            isVideo: false
+          }],
+          // For backwards compatibility
           imageUrl: bestImage.url,
           width: bestImage.width,
           height: bestImage.height
@@ -670,6 +713,13 @@ app.post('/instagram-media', async (req, res) => {
           const thumbnail = mediaData.image_versions[0]
           return res.json({
             success: true,
+            isCarousel: false,
+            images: [{
+              url: thumbnail.url,
+              width: thumbnail.width,
+              height: thumbnail.height,
+              isVideo: true
+            }],
             imageUrl: thumbnail.url,
             width: thumbnail.width,
             height: thumbnail.height,
