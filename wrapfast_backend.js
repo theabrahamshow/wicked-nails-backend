@@ -4,10 +4,10 @@ const crypto = require('crypto')
 const axios = require('axios')
 const OpenAI = require('openai')
 const { GoogleGenAI } = require('@google/genai')
-require('path')
+const path = require('path')
 require('assert')
 const https = require('https')
-require('dotenv').config()
+require('dotenv').config({ path: path.join(__dirname, '.env') })
 const app = express()
 
 // Change the port if you need it.
