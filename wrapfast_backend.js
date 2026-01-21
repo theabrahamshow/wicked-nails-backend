@@ -31,6 +31,7 @@ const VISION_MAX_TOKENS = parseInt(process.env.VISION_MAX_TOKENS, 10) || 1000
 const ANTHROPIC_MAX_TOKENS = parseInt(process.env.ANTHROPIC_MAX_TOKENS, 10) || 1000
 const telegramBotKey = process.env.TELEGRAM_BOT_KEY
 const channelId = process.env.TELEGRAM_CHANNEL_ID
+const HIKERAPI_ACCESS_KEY = process.env.HIKERAPI_ACCESS_KEY
 
 // Credits constants
 const FREE_USER_CREDITS = 1
@@ -82,6 +83,8 @@ app.use('/gpt-image-edits', promptLimiter)
 app.use('/anthropic-messages', promptLimiter)
 // POST endpoint for Gemini nail try-on
 app.use('/nail-tryon', promptLimiter)
+// POST endpoint for Instagram media extraction via HikerAPI
+app.use('/instagram-media', promptLimiter)
 
 // GET endpoint to send de hmac secret key
 app.use('/auth', authtLimiter)
@@ -607,6 +610,103 @@ CRITICAL CONSTRAINTS:
       error: 'Request failed',
       details: error.message
     })
+  }
+})
+
+// Instagram Media Extraction Endpoint
+// Uses HikerAPI to get full-resolution Instagram images
+// Expects: { url: String (Instagram post URL) }
+// Returns: { success: Boolean, imageUrl: String, width: Number, height: Number }
+app.post('/instagram-media', async (req, res) => {
+  try {
+    const { url } = req.body
+
+    if (!url) {
+      return res.status(400).json({ success: false, error: 'Missing "url" in request body' })
+    }
+
+    // Validate it's an Instagram URL
+    if (!url.includes('instagram.com')) {
+      return res.status(400).json({ success: false, error: 'Invalid Instagram URL' })
+    }
+
+    if (!HIKERAPI_ACCESS_KEY) {
+      console.error('HikerAPI access key not configured')
+      return res.status(503).json({ success: false, error: 'Instagram media service not configured' })
+    }
+
+    console.log(`\n📸 Fetching Instagram media for URL: ${url}`)
+
+    try {
+      // Call HikerAPI to get media info
+      const hikerResponse = await axios.get('https://api.hikerapi.com/v1/media/by/url', {
+        params: { url },
+        headers: {
+          'accept': 'application/json',
+          'x-access-key': HIKERAPI_ACCESS_KEY
+        }
+      })
+
+      const mediaData = hikerResponse.data
+
+      // Extract the highest resolution image
+      // image_versions array is sorted by resolution (highest first)
+      if (mediaData.image_versions && mediaData.image_versions.length > 0) {
+        const bestImage = mediaData.image_versions[0]
+        console.log(`✅ Found Instagram image: ${bestImage.width}x${bestImage.height}`)
+
+        return res.json({
+          success: true,
+          imageUrl: bestImage.url,
+          width: bestImage.width,
+          height: bestImage.height
+        })
+      }
+
+      // Fallback: check for video thumbnail if it's a video/reel
+      if (mediaData.video_versions && mediaData.video_versions.length > 0) {
+        // For videos, try to get the thumbnail
+        if (mediaData.image_versions && mediaData.image_versions.length > 0) {
+          const thumbnail = mediaData.image_versions[0]
+          return res.json({
+            success: true,
+            imageUrl: thumbnail.url,
+            width: thumbnail.width,
+            height: thumbnail.height,
+            isVideoThumbnail: true
+          })
+        }
+      }
+
+      console.log('No image found in HikerAPI response')
+      return res.status(404).json({ success: false, error: 'No image found for this Instagram post' })
+
+    } catch (apiError) {
+      // Handle specific HikerAPI errors
+      if (apiError.response) {
+        const status = apiError.response.status
+        const errorData = apiError.response.data
+
+        if (status === 404) {
+          console.log('Instagram post not found via HikerAPI')
+          return res.status(404).json({ success: false, error: 'Instagram post not found' })
+        }
+
+        if (status === 429) {
+          console.log('HikerAPI rate limit exceeded')
+          return res.status(429).json({ success: false, error: 'Service temporarily unavailable, please try again later' })
+        }
+
+        console.error('HikerAPI error:', status, errorData)
+        return res.status(500).json({ success: false, error: 'Failed to fetch Instagram media' })
+      }
+
+      throw apiError
+    }
+
+  } catch (error) {
+    console.error('Instagram media endpoint error:', error.message || error)
+    res.status(500).json({ success: false, error: 'Request failed', details: error.message })
   }
 })
 
