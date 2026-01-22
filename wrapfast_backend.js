@@ -649,12 +649,26 @@ app.post('/instagram-media', async (req, res) => {
       })
 
       const mediaData = hikerResponse.data
+      
+      // Debug: Log the response structure to understand what HikerAPI returns
+      console.log('📦 HikerAPI response keys:', Object.keys(mediaData))
+      if (mediaData.carousel_media) {
+        console.log('📦 carousel_media count:', mediaData.carousel_media.length)
+      }
+      if (mediaData.resources) {
+        console.log('📦 resources count:', mediaData.resources.length)
+      }
+      if (mediaData.media_type) {
+        console.log('📦 media_type:', mediaData.media_type)
+      }
 
       // Check if this is a carousel post (multiple images)
-      if (mediaData.carousel_media && mediaData.carousel_media.length > 0) {
+      // HikerAPI may use 'carousel_media' or 'resources' for carousel items
+      const carouselItems = mediaData.carousel_media || mediaData.resources
+      if (carouselItems && carouselItems.length > 1) {
         const images = []
         
-        for (const item of mediaData.carousel_media) {
+        for (const item of carouselItems) {
           // Each carousel item can be an image or video
           if (item.image_versions && item.image_versions.length > 0) {
             const bestImage = item.image_versions[0]
