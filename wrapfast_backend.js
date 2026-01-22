@@ -10,6 +10,9 @@ const https = require('https')
 require('dotenv').config({ path: path.join(__dirname, '.env') })
 const app = express()
 
+// Trust proxy - required for rate limiting behind Render's reverse proxy
+app.set('trust proxy', 1)
+
 // Change the port if you need it.
 const port = 10000
 
