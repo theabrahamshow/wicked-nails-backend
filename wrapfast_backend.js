@@ -37,9 +37,259 @@ const channelId = process.env.TELEGRAM_CHANNEL_ID
 const HIKERAPI_ACCESS_KEY = process.env.HIKERAPI_ACCESS_KEY
 
 // Credits constants
-const FREE_USER_CREDITS = 1
+const FREE_USER_CREDITS = 0 // Free users get 0 credits (demo is separate)
 const WEEKLY_SUBSCRIPTION_CREDITS = 15
 const MONTHLY_SUBSCRIPTION_CREDITS = 60
+const ANNUAL_SUBSCRIPTION_CREDITS = 60 // Same as monthly, resets monthly
+const REVENUECAT_WEBHOOK_SECRET = process.env.REVENUECAT_WEBHOOK_SECRET
+const REVENUECAT_API_KEY = process.env.REVENUECAT_API_KEY // Secret API key from RevenueCat dashboard
+
+// =============================================================================
+// PERSISTENT USAGE TRACKING via RevenueCat Subscriber Attributes
+// =============================================================================
+// RevenueCat stores custom attributes per subscriber, which persist across:
+// - App reinstalls
+// - Server restarts/deploys
+// - Device changes (tied to StableID)
+// =============================================================================
+
+// In-memory cache for subscriber data (reduces RevenueCat API calls)
+const subscriberCache = new Map()
+const CACHE_TTL_MS = 10 * 1000 // 10 seconds cache (short for responsiveness)
+
+// Helper to get the start of current week (Sunday)
+function getWeekStart() {
+  const now = new Date()
+  const dayOfWeek = now.getUTCDay()
+  const startOfWeek = new Date(now)
+  startOfWeek.setUTCDate(now.getUTCDate() - dayOfWeek)
+  startOfWeek.setUTCHours(0, 0, 0, 0)
+  return startOfWeek.toISOString()
+}
+
+// Check if we need to reset weekly credits (new week started)
+function checkAndResetWeekly(usage, userId) {
+  const currentWeekStart = getWeekStart()
+  if (usage.weekStart !== currentWeekStart) {
+    // New week - reset credits
+    console.log(`🔄 New week detected for ${userId}, resetting weekly credits`)
+    usage.weeklyUsed = 0
+    usage.weekStart = currentWeekStart
+    // Save the reset asynchronously
+    saveUserUsage(userId, usage).catch(err => console.error('Failed to save weekly reset:', err))
+  }
+  return usage
+}
+
+// Get user usage from RevenueCat subscriber attributes
+async function getUserUsage(userId) {
+  // Check cache first
+  const cached = subscriberCache.get(userId)
+  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+    return checkAndResetWeekly(cached.usage, userId)
+  }
+  
+  // Fetch from RevenueCat
+  try {
+    const response = await axios.get(
+      `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+    
+    const subscriber = response.data.subscriber
+    const attrs = subscriber.subscriber_attributes || {}
+    
+    // Parse usage from subscriber attributes (with defaults)
+    const usage = {
+      weeklyUsed: parseInt(attrs.wicked_weekly_used?.value || '0', 10),
+      weekStart: attrs.wicked_week_start?.value || getWeekStart(),
+      purchasedCredits: parseInt(attrs.wicked_purchased_credits?.value || '0', 10),
+      demoUsed: attrs.wicked_demo_used?.value === 'true',
+      // Get subscription info from entitlements
+      isSubscribed: Object.keys(subscriber.entitlements?.active || {}).length > 0,
+      subscriptionType: getSubscriptionTypeFromEntitlements(subscriber.entitlements?.active),
+      expiresAt: getExpirationFromEntitlements(subscriber.entitlements?.active)
+    }
+    
+    // Cache the result
+    subscriberCache.set(userId, { usage, timestamp: Date.now() })
+    
+    return checkAndResetWeekly(usage, userId)
+  } catch (error) {
+    if (error.response?.status === 404) {
+      // New user - return defaults
+      const usage = {
+        weeklyUsed: 0,
+        weekStart: getWeekStart(),
+        purchasedCredits: 0,
+        demoUsed: false,
+        isSubscribed: false,
+        subscriptionType: null,
+        expiresAt: null
+      }
+      subscriberCache.set(userId, { usage, timestamp: Date.now() })
+      return usage
+    }
+    console.error('Failed to fetch subscriber from RevenueCat:', error.message)
+    throw error
+  }
+}
+
+// Extract subscription type from active entitlements
+function getSubscriptionTypeFromEntitlements(activeEntitlements) {
+  if (!activeEntitlements || Object.keys(activeEntitlements).length === 0) {
+    return null
+  }
+  // Look at the product identifier to determine type
+  for (const entitlement of Object.values(activeEntitlements)) {
+    const productId = (entitlement.product_identifier || '').toLowerCase()
+    if (productId.includes('lifetime')) return 'lifetime'
+    if (productId.includes('annual') || productId.includes('yearly')) return 'annual'
+    if (productId.includes('month')) return 'monthly'
+    if (productId.includes('week')) return 'weekly'
+  }
+  return 'weekly' // Default
+}
+
+// Get expiration date from active entitlements
+function getExpirationFromEntitlements(activeEntitlements) {
+  if (!activeEntitlements || Object.keys(activeEntitlements).length === 0) {
+    return null
+  }
+  for (const entitlement of Object.values(activeEntitlements)) {
+    if (entitlement.expires_date) {
+      return entitlement.expires_date
+    }
+  }
+  return null
+}
+
+// Save usage to RevenueCat subscriber attributes (PERSISTENT!)
+async function saveUserUsage(userId, usage) {
+  try {
+    await axios.post(
+      `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}/attributes`,
+      {
+        attributes: {
+          wicked_weekly_used: { value: String(usage.weeklyUsed) },
+          wicked_week_start: { value: usage.weekStart },
+          wicked_purchased_credits: { value: String(usage.purchasedCredits) },
+          wicked_demo_used: { value: usage.demoUsed ? 'true' : 'false' }
+        }
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+    
+    // Update cache
+    subscriberCache.set(userId, { usage, timestamp: Date.now() })
+    console.log(`💾 Saved usage to RevenueCat for ${userId}`)
+  } catch (error) {
+    console.error('Failed to save subscriber attributes:', error.message)
+    throw error
+  }
+}
+
+// Invalidate cache for a user (used after webhook events)
+function invalidateUserCache(userId) {
+  subscriberCache.delete(userId)
+  console.log(`🗑️ Cache invalidated for ${userId}`)
+}
+
+// Get credits remaining for a user
+function getCreditsRemaining(usage) {
+  if (!usage.isSubscribed) {
+    // Not subscribed - only purchased credits available
+    return usage.purchasedCredits
+  }
+  
+  // Get total credits based on subscription type
+  let totalCredits
+  switch (usage.subscriptionType) {
+    case 'weekly':
+      totalCredits = WEEKLY_SUBSCRIPTION_CREDITS
+      break
+    case 'monthly':
+    case 'annual':
+      totalCredits = MONTHLY_SUBSCRIPTION_CREDITS
+      break
+    case 'lifetime':
+      totalCredits = 9999 // Effectively unlimited
+      break
+    default:
+      totalCredits = WEEKLY_SUBSCRIPTION_CREDITS
+  }
+  
+  // Subscription credits + purchased credits - used
+  const subscriptionRemaining = Math.max(0, totalCredits - usage.weeklyUsed)
+  return subscriptionRemaining + usage.purchasedCredits
+}
+
+// Get user credits info for API response
+async function getUserCreditsInfo(userId) {
+  try {
+    const usage = await getUserUsage(userId)
+    const creditsRemaining = getCreditsRemaining(usage)
+    
+    // Determine total credits for display
+    let totalCredits = usage.purchasedCredits
+    if (usage.isSubscribed) {
+      switch (usage.subscriptionType) {
+        case 'weekly':
+          totalCredits += WEEKLY_SUBSCRIPTION_CREDITS
+          break
+        case 'monthly':
+        case 'annual':
+          totalCredits += MONTHLY_SUBSCRIPTION_CREDITS
+          break
+        case 'lifetime':
+          totalCredits += 9999
+          break
+        default:
+          totalCredits += WEEKLY_SUBSCRIPTION_CREDITS
+      }
+    }
+    
+    return {
+      creditsRemaining,
+      creditsTotal: totalCredits,
+      subscriptionStatus: usage.isSubscribed ? 'active' : 'none',
+      subscriptionType: usage.subscriptionType,
+      resetsAt: usage.isSubscribed ? getNextWeekStart() : null,
+      demoUsed: usage.demoUsed
+    }
+  } catch (error) {
+    console.error('Failed to get user credits info:', error.message)
+    return {
+      creditsRemaining: 0,
+      creditsTotal: 0,
+      subscriptionStatus: 'none',
+      subscriptionType: null,
+      resetsAt: null,
+      demoUsed: false
+    }
+  }
+}
+
+// Get the start of next week (for reset display)
+function getNextWeekStart() {
+  const now = new Date()
+  const dayOfWeek = now.getUTCDay()
+  const daysUntilNextSunday = 7 - dayOfWeek
+  const nextWeek = new Date(now)
+  nextWeek.setUTCDate(now.getUTCDate() + daysUntilNextSunday)
+  nextWeek.setUTCHours(0, 0, 0, 0)
+  return nextWeek.toISOString()
+}
 
 // Initialize OpenAI client (optional - only if API key is provided)
 let openai = null
@@ -113,6 +363,125 @@ const verifyHmacSignature = (req, res, next) => {
 }
 
 app.use(express.json({ limit: '10mb' }))
+
+// =============================================================================
+// REVENUECAT WEBHOOK ENDPOINT
+// Receives subscription events from RevenueCat
+// The main job is to INVALIDATE CACHE so next request fetches fresh data
+// RevenueCat itself stores the subscription state - we just need to know to refetch
+// =============================================================================
+app.post('/webhook/revenuecat', async (req, res) => {
+  try {
+    // Verify Authorization header matches our configured secret
+    const authHeader = req.headers['authorization']
+    const expectedAuth = REVENUECAT_WEBHOOK_SECRET
+    
+    if (!expectedAuth) {
+      console.error('❌ REVENUECAT_WEBHOOK_SECRET not configured in .env')
+      return res.status(500).send('Webhook not configured')
+    }
+    
+    if (!authHeader || authHeader !== expectedAuth) {
+      console.warn('⚠️ Unauthorized webhook attempt. Header:', authHeader ? 'present but invalid' : 'missing')
+      return res.status(401).send('Unauthorized')
+    }
+    
+    console.log('✅ Webhook authorization verified')
+
+    const event = req.body
+    const eventType = event.type
+    const appUserId = event.app_user_id // This is the StableID we set
+    const productId = event.product_id || ''
+
+    console.log(`\n📥 RevenueCat webhook: ${eventType} for user ${appUserId}`)
+
+    // Invalidate cache for this user so next request fetches fresh data from RevenueCat
+    invalidateUserCache(appUserId)
+
+    // Handle credit pack purchases - need to add to subscriber attributes
+    if (eventType === 'NON_RENEWING_PURCHASE') {
+      // Credit pack or one-time purchase
+      // Parse credits from product ID (e.g., "credits_10_pack" -> 10)
+      const creditsMatch = productId.match(/(\d+)/)
+      const creditsToAdd = creditsMatch ? parseInt(creditsMatch[1], 10) : 10
+      
+      try {
+        // Fetch current usage and add credits
+        const usage = await getUserUsage(appUserId)
+        usage.purchasedCredits = (usage.purchasedCredits || 0) + creditsToAdd
+        await saveUserUsage(appUserId, usage)
+        console.log(`💰 Added ${creditsToAdd} purchased credits for ${appUserId}`)
+      } catch (error) {
+        console.error('Failed to add purchased credits:', error.message)
+      }
+    }
+
+    // Handle renewal - reset weekly credits
+    if (eventType === 'RENEWAL') {
+      try {
+        const usage = await getUserUsage(appUserId)
+        usage.weeklyUsed = 0
+        usage.weekStart = getWeekStart()
+        await saveUserUsage(appUserId, usage)
+        console.log(`🔄 Reset weekly credits for ${appUserId}`)
+      } catch (error) {
+        console.error('Failed to reset weekly credits:', error.message)
+      }
+    }
+
+    // Log other event types
+    switch (eventType) {
+      case 'INITIAL_PURCHASE':
+        console.log(`✅ New subscription for ${appUserId}`)
+        break
+      case 'EXPIRATION':
+      case 'CANCELLATION':
+        console.log(`❌ Subscription ended for ${appUserId}`)
+        break
+      case 'BILLING_ISSUE':
+        console.log(`⚠️ Billing issue for ${appUserId}`)
+        break
+      case 'SUBSCRIBER_ALIAS':
+        console.log(`🔗 User alias event for ${appUserId}`)
+        break
+      default:
+        console.log(`ℹ️ Handled event type: ${eventType}`)
+    }
+
+    // Always return 200 OK quickly to avoid timeouts
+    res.status(200).send('OK')
+  } catch (error) {
+    console.error('RevenueCat webhook error:', error)
+    // Still return 200 to prevent RevenueCat from retrying
+    res.status(200).send('OK')
+  }
+})
+
+// =============================================================================
+// USER CREDITS ENDPOINT
+// Returns current credit balance for a user (iOS app queries this)
+// Fetches from RevenueCat (with caching) to get the most accurate data
+// =============================================================================
+app.get('/user/credits', async (req, res) => {
+  try {
+    const stableId = req.headers['x-stable-id'] || req.query.stableId
+
+    if (!stableId) {
+      return res.status(400).json({ error: 'Missing stableId' })
+    }
+
+    const creditsInfo = await getUserCreditsInfo(stableId)
+    console.log(`📊 Credits query for ${stableId}: ${creditsInfo.creditsRemaining}/${creditsInfo.creditsTotal}`)
+
+    res.json({
+      success: true,
+      ...creditsInfo
+    })
+  } catch (error) {
+    console.error('Credits endpoint error:', error)
+    res.status(500).json({ error: 'Failed to get credits' })
+  }
+})
 
 app.use(verifyHmacSignature)
 
@@ -411,10 +780,8 @@ app.post('/gpt-image-edits', async (req, res) => {
 // {
 //   handImage: String (base64 encoded image of user's hand),
 //   inspoImage: String (base64 encoded image of nail design inspiration),
-//   isSubscribed: Boolean (whether user has active subscription),
-//   subscriptionType: String (optional: 'weekly' or 'monthly'),
-//   freeCreditsUsed: Number (how many free credits user has used),
-//   plusCreditsUsed: Number (how many subscription credits user has used)
+//   stableId: String (user's stable ID for server-side credit validation),
+//   model: String (optional: 'flash' for faster model)
 // }
 // Returns:
 // {
@@ -425,7 +792,9 @@ app.post('/gpt-image-edits', async (req, res) => {
 // }
 app.post('/nail-tryon', async (req, res) => {
   try {
-    const { handImage, inspoImage, isSubscribed, subscriptionType, freeCreditsUsed, plusCreditsUsed, model } = req.body
+    const { handImage, inspoImage, stableId, model } = req.body
+    // Legacy support: also accept old parameters for backwards compatibility during transition
+    const { isSubscribed: legacyIsSubscribed, subscriptionType: legacySubType, freeCreditsUsed, plusCreditsUsed } = req.body
 
     // Determine which model to use: "flash" = 2.5 Flash Image, default = 3 Pro Image
     const useFlashModel = model === 'flash'
@@ -440,27 +809,57 @@ app.post('/nail-tryon', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Missing "inspoImage" in request body' })
     }
 
-    // Server-side credits validation
+    // Server-side credits validation using RevenueCat subscriber attributes
     // Set DEBUG_MODE=true in .env to bypass credit checks during development
     const debugMode = process.env.DEBUG_MODE === 'true'
     
     let creditsRemaining = 0
     let canProceed = false
+    let isDemo = false
+    let usage = null
 
     if (debugMode) {
       // Bypass credit check in debug mode
       canProceed = true
       creditsRemaining = 999
       console.log('⚠️ DEBUG MODE: Bypassing credit validation')
-    } else if (isSubscribed) {
-      // Subscribed user - check subscription credits
-      const totalCredits = subscriptionType === 'monthly' ? MONTHLY_SUBSCRIPTION_CREDITS : WEEKLY_SUBSCRIPTION_CREDITS
-      creditsRemaining = Math.max(0, totalCredits - (plusCreditsUsed || 0))
-      canProceed = creditsRemaining > 0
+    } else if (stableId) {
+      // Fetch usage from RevenueCat (with caching)
+      try {
+        usage = await getUserUsage(stableId)
+        creditsRemaining = getCreditsRemaining(usage)
+        
+        if (creditsRemaining > 0) {
+          // User has credits available
+          canProceed = true
+        } else if (!usage.demoUsed) {
+          // User hasn't used their demo yet - allow one free generation
+          canProceed = true
+          isDemo = true
+          console.log(`🎁 Demo generation for user ${stableId}`)
+        } else {
+          // No credits and demo already used
+          canProceed = false
+        }
+        
+        console.log(`👤 User ${stableId}: subscribed=${usage.isSubscribed}, credits=${creditsRemaining}, demoUsed=${usage.demoUsed}`)
+      } catch (error) {
+        console.error('Failed to fetch user usage:', error.message)
+        return res.status(500).json({ success: false, error: 'Failed to verify credits' })
+      }
+    } else if (legacyIsSubscribed !== undefined) {
+      // LEGACY: Fallback to old client-trusted validation (for backwards compatibility)
+      console.log('⚠️ Using legacy credit validation (client-trusted)')
+      if (legacyIsSubscribed) {
+        const totalCredits = legacySubType === 'monthly' ? MONTHLY_SUBSCRIPTION_CREDITS : WEEKLY_SUBSCRIPTION_CREDITS
+        creditsRemaining = Math.max(0, totalCredits - (plusCreditsUsed || 0))
+        canProceed = creditsRemaining > 0
+      } else {
+        creditsRemaining = Math.max(0, FREE_USER_CREDITS - (freeCreditsUsed || 0))
+        canProceed = creditsRemaining > 0
+      }
     } else {
-      // Free user - check free credits
-      creditsRemaining = Math.max(0, FREE_USER_CREDITS - (freeCreditsUsed || 0))
-      canProceed = creditsRemaining > 0
+      return res.status(400).json({ success: false, error: 'Missing "stableId" in request body' })
     }
 
     if (!canProceed) {
@@ -468,11 +867,11 @@ app.post('/nail-tryon', async (req, res) => {
         success: false,
         error: 'No credits remaining',
         creditsRemaining: 0,
-        requiresSubscription: !isSubscribed
+        requiresSubscription: true
       })
     }
 
-    console.log(`\n💅 Requesting nail try-on generation. Subscribed: ${isSubscribed}, Credits remaining: ${creditsRemaining}`)
+    console.log(`\n💅 Requesting nail try-on generation. Credits remaining: ${creditsRemaining}, isDemo: ${isDemo}`)
 
     // Build the nail try-on prompt
     const nailTryOnPrompt = buildNailTryOnPrompt()
@@ -571,9 +970,37 @@ CRITICAL CONSTRAINTS:
         })
       }
 
-      // Success - credit will be deducted client-side
-      // Return new remaining credits (after deduction)
-      const newCreditsRemaining = creditsRemaining - 1
+      // Success - deduct credit SERVER-SIDE (saved to RevenueCat attributes)
+      let newCreditsRemaining = creditsRemaining
+      
+      if (stableId && usage) {
+        try {
+          if (isDemo) {
+            // Mark demo as used (no credit deduction for demo)
+            usage.demoUsed = true
+            await saveUserUsage(stableId, usage)
+            console.log(`✅ Demo used for ${stableId}`)
+          } else {
+            // Deduct credit from appropriate pool
+            if (usage.purchasedCredits > 0 && !usage.isSubscribed) {
+              // Use purchased credits first if not subscribed
+              usage.purchasedCredits = Math.max(0, usage.purchasedCredits - 1)
+            } else {
+              // Use subscription credits
+              usage.weeklyUsed = (usage.weeklyUsed || 0) + 1
+            }
+            await saveUserUsage(stableId, usage)
+            newCreditsRemaining = getCreditsRemaining(usage)
+            console.log(`💳 Credit deducted for ${stableId}, remaining: ${newCreditsRemaining}`)
+          }
+        } catch (error) {
+          console.error('Failed to save credit deduction:', error.message)
+          // Still return success - image was generated, credit deduction is best effort
+        }
+      } else {
+        // Legacy mode - just calculate remaining (client handles deduction)
+        newCreditsRemaining = creditsRemaining - 1
+      }
 
       res.json({
         success: true,
