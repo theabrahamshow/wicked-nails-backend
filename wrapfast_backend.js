@@ -108,6 +108,17 @@ async function getUserUsage(userId) {
     console.log(`📡 RevenueCat raw subscriptions: ${JSON.stringify(Object.keys(response.data.subscriber?.subscriptions || {}))}`)
     console.log(`📡 RevenueCat raw non_subscriptions: ${JSON.stringify(Object.keys(response.data.subscriber?.non_subscriptions || {}))}`)
     
+    // Log full subscription details to see expiration
+    const subs = response.data.subscriber?.subscriptions || {}
+    for (const [productId, subData] of Object.entries(subs)) {
+      console.log(`📡 Subscription ${productId}:`)
+      console.log(`   - expires_date: ${subData.expires_date}`)
+      console.log(`   - purchase_date: ${subData.purchase_date}`)
+      console.log(`   - is_sandbox: ${subData.is_sandbox}`)
+      console.log(`   - unsubscribe_detected_at: ${subData.unsubscribe_detected_at}`)
+      console.log(`   - billing_issues_detected_at: ${subData.billing_issues_detected_at}`)
+    }
+    
     const subscriber = response.data.subscriber
     const attrs = subscriber.subscriber_attributes || {}
     
