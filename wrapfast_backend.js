@@ -130,19 +130,42 @@ async function getUserUsage(userId) {
     console.log(`   - Active entitlements: [${activeEntitlements.join(', ')}]`)
     console.log(`   - Subscriber attributes: ${JSON.stringify(Object.keys(attrs))}`)
     
+    // Check for active subscription from raw subscription data as fallback
+    // This handles cases where entitlements might not be populated but subscription exists
+    let hasActiveSubscription = Object.keys(subscriber.entitlements?.active || {}).length > 0
+    let subscriptionType = getSubscriptionTypeFromEntitlements(subscriber.entitlements?.active)
+    let expiresAt = getExpirationFromEntitlements(subscriber.entitlements?.active)
+    
+    // Fallback: Check raw subscriptions if entitlements are empty
+    if (!hasActiveSubscription && subs) {
+      const now = new Date()
+      for (const [productId, subData] of Object.entries(subs)) {
+        const expiresDate = new Date(subData.expires_date)
+        if (expiresDate > now && !subData.unsubscribe_detected_at) {
+          console.log(`✅ Found active subscription via raw data: ${productId}, expires: ${subData.expires_date}`)
+          hasActiveSubscription = true
+          subscriptionType = productId.includes('weekly') ? 'weekly' : 
+                            productId.includes('monthly') ? 'monthly' : 
+                            productId.includes('annual') ? 'annual' : 'unknown'
+          expiresAt = subData.expires_date
+          break
+        }
+      }
+    }
+    
     // Parse usage from subscriber attributes (with defaults)
     const usage = {
       weeklyUsed: parseInt(attrs.wicked_weekly_used?.value || '0', 10),
       weekStart: attrs.wicked_week_start?.value || getWeekStart(),
       purchasedCredits: parseInt(attrs.wicked_purchased_credits?.value || '0', 10),
       demoUsed: attrs.wicked_demo_used?.value === 'true',
-      // Get subscription info from entitlements
-      isSubscribed: Object.keys(subscriber.entitlements?.active || {}).length > 0,
-      subscriptionType: getSubscriptionTypeFromEntitlements(subscriber.entitlements?.active),
-      expiresAt: getExpirationFromEntitlements(subscriber.entitlements?.active)
+      // Get subscription info from entitlements OR raw subscriptions
+      isSubscribed: hasActiveSubscription,
+      subscriptionType: subscriptionType,
+      expiresAt: expiresAt
     }
     
-    console.log(`   - isSubscribed: ${usage.isSubscribed}, type: ${usage.subscriptionType}`)
+    console.log(`   - isSubscribed: ${usage.isSubscribed}, type: ${usage.subscriptionType}, expiresAt: ${usage.expiresAt}`)
     
     // Cache the result
     subscriberCache.set(userId, { usage, timestamp: Date.now() })
