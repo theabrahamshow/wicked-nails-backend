@@ -106,6 +106,8 @@ async function getUserUsage(userId) {
     )
     
     console.log(`📡 RevenueCat API response status: ${response.status}`)
+    console.log(`📡 RevenueCat raw subscriptions: ${JSON.stringify(Object.keys(response.data.subscriber?.subscriptions || {}))}`)
+    console.log(`📡 RevenueCat raw non_subscriptions: ${JSON.stringify(Object.keys(response.data.subscriber?.non_subscriptions || {}))}`)
     
     const subscriber = response.data.subscriber
     const attrs = subscriber.subscriber_attributes || {}
