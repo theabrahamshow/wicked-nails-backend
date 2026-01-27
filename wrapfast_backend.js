@@ -91,8 +91,11 @@ async function getUserUsage(userId) {
   
   // Fetch from RevenueCat
   try {
+    const rcUrl = `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`
+    console.log(`📡 Calling RevenueCat API: ${rcUrl}`)
+    
     const response = await axios.get(
-      `https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+      rcUrl,
       {
         headers: {
           'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
@@ -100,6 +103,8 @@ async function getUserUsage(userId) {
         }
       }
     )
+    
+    console.log(`📡 RevenueCat API response status: ${response.status}`)
     
     const subscriber = response.data.subscriber
     const attrs = subscriber.subscriber_attributes || {}
@@ -1756,4 +1761,6 @@ function sendTelegram (message) {
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`)
+  console.log(`🔑 RevenueCat API key configured: ${REVENUECAT_API_KEY ? `sk_...${REVENUECAT_API_KEY.slice(-8)}` : '❌ NOT SET'}`)
+  console.log(`🔐 RevenueCat webhook secret configured: ${REVENUECAT_WEBHOOK_SECRET ? '✅ YES' : '❌ NOT SET'}`)
 })
