@@ -122,12 +122,13 @@ async function getUserUsage(userId) {
     const subscriber = response.data.subscriber
     const attrs = subscriber.subscriber_attributes || {}
     
-    // Debug logging for entitlements
+    // Debug logging for entitlements - show FULL raw data
     const activeEntitlements = Object.keys(subscriber.entitlements?.active || {})
     const allEntitlements = Object.keys(subscriber.entitlements?.all || {})
     console.log(`🔑 RevenueCat response for ${userId}:`)
     console.log(`   - All entitlements: [${allEntitlements.join(', ')}]`)
     console.log(`   - Active entitlements: [${activeEntitlements.join(', ')}]`)
+    console.log(`   - Raw entitlements object: ${JSON.stringify(subscriber.entitlements)}`)
     console.log(`   - Subscriber attributes: ${JSON.stringify(Object.keys(attrs))}`)
     
     // Check for active subscription from raw subscription data as fallback
