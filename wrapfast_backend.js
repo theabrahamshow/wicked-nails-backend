@@ -104,6 +104,14 @@ async function getUserUsage(userId) {
     const subscriber = response.data.subscriber
     const attrs = subscriber.subscriber_attributes || {}
     
+    // Debug logging for entitlements
+    const activeEntitlements = Object.keys(subscriber.entitlements?.active || {})
+    const allEntitlements = Object.keys(subscriber.entitlements?.all || {})
+    console.log(`🔑 RevenueCat response for ${userId}:`)
+    console.log(`   - All entitlements: [${allEntitlements.join(', ')}]`)
+    console.log(`   - Active entitlements: [${activeEntitlements.join(', ')}]`)
+    console.log(`   - Subscriber attributes: ${JSON.stringify(Object.keys(attrs))}`)
+    
     // Parse usage from subscriber attributes (with defaults)
     const usage = {
       weeklyUsed: parseInt(attrs.wicked_weekly_used?.value || '0', 10),
@@ -115,6 +123,8 @@ async function getUserUsage(userId) {
       subscriptionType: getSubscriptionTypeFromEntitlements(subscriber.entitlements?.active),
       expiresAt: getExpirationFromEntitlements(subscriber.entitlements?.active)
     }
+    
+    console.log(`   - isSubscribed: ${usage.isSubscribed}, type: ${usage.subscriptionType}`)
     
     // Cache the result
     subscriberCache.set(userId, { usage, timestamp: Date.now() })
@@ -468,12 +478,16 @@ app.get('/user/credits', async (req, res) => {
   try {
     const stableId = req.headers['x-stable-id'] || req.query.stableId
 
+    console.log(`📥 Credits request received - stableId from header: ${req.headers['x-stable-id']}, from query: ${req.query.stableId}`)
+
     if (!stableId) {
+      console.log('❌ Missing stableId in request')
       return res.status(400).json({ error: 'Missing stableId' })
     }
 
+    console.log(`🔍 Fetching credits for stableId: ${stableId}`)
     const creditsInfo = await getUserCreditsInfo(stableId)
-    console.log(`📊 Credits query for ${stableId}: ${creditsInfo.creditsRemaining}/${creditsInfo.creditsTotal}`)
+    console.log(`📊 Credits query for ${stableId}: ${creditsInfo.creditsRemaining}/${creditsInfo.creditsTotal}, subscribed: ${creditsInfo.subscriptionStatus}`)
 
     res.json({
       success: true,
@@ -481,6 +495,7 @@ app.get('/user/credits', async (req, res) => {
     })
   } catch (error) {
     console.error('Credits endpoint error:', error)
+    console.error('Error details:', error.response?.data || error.message)
     res.status(500).json({ error: 'Failed to get credits' })
   }
 })
