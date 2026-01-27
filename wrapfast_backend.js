@@ -99,8 +99,7 @@ async function getUserUsage(userId) {
       {
         headers: {
           'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
-          'Content-Type': 'application/json',
-          'X-Platform': 'ios'
+          'Content-Type': 'application/json'
         }
       }
     )
@@ -205,8 +204,7 @@ async function saveUserUsage(userId, usage) {
       {
         headers: {
           'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
-          'Content-Type': 'application/json',
-          'X-Platform': 'ios'
+          'Content-Type': 'application/json'
         }
       }
     )
