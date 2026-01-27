@@ -133,6 +133,7 @@ async function getUserUsage(userId) {
   } catch (error) {
     if (error.response?.status === 404) {
       // New user - return defaults
+      console.log(`⚠️ RevenueCat 404 for user ${userId} - user not found, returning defaults`)
       const usage = {
         weeklyUsed: 0,
         weekStart: getWeekStart(),
@@ -145,7 +146,8 @@ async function getUserUsage(userId) {
       subscriberCache.set(userId, { usage, timestamp: Date.now() })
       return usage
     }
-    console.error('Failed to fetch subscriber from RevenueCat:', error.message)
+    console.error(`❌ Failed to fetch subscriber ${userId} from RevenueCat:`, error.message)
+    console.error(`   Status: ${error.response?.status}, Data: ${JSON.stringify(error.response?.data)}`)
     throw error
   }
 }
@@ -399,13 +401,19 @@ app.post('/webhook/revenuecat', async (req, res) => {
     }
     
     console.log('✅ Webhook authorization verified')
-
-    const event = req.body
+    
+    // RevenueCat wraps the event data inside an "event" object
+    const webhookPayload = req.body
+    const event = webhookPayload.event || webhookPayload // Support both nested and flat structure
     const eventType = event.type
     const appUserId = event.app_user_id // This is the StableID we set
     const productId = event.product_id || ''
 
-    console.log(`\n📥 RevenueCat webhook: ${eventType} for user ${appUserId}`)
+    console.log(`\n📥 RevenueCat webhook received:`)
+    console.log(`   - Event type: ${eventType}`)
+    console.log(`   - User ID: ${appUserId}`)
+    console.log(`   - Product ID: ${productId}`)
+    console.log(`   - Raw payload keys: ${Object.keys(webhookPayload).join(', ')}`)
 
     // Invalidate cache for this user so next request fetches fresh data from RevenueCat
     invalidateUserCache(appUserId)
