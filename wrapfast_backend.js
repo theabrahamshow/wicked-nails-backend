@@ -338,6 +338,8 @@ app.use('/anthropic-messages', promptLimiter)
 app.use('/nail-tryon', promptLimiter)
 // POST endpoint for Instagram media extraction via HikerAPI
 app.use('/instagram-media', promptLimiter)
+// POST endpoint for feedback alerts to Telegram
+app.use('/feedback-alert', promptLimiter)
 
 // GET endpoint to send de hmac secret key
 app.use('/auth', authtLimiter)
@@ -1201,6 +1203,61 @@ app.post('/instagram-media', async (req, res) => {
   } catch (error) {
     console.error('Instagram media endpoint error:', error.message || error)
     res.status(500).json({ success: false, error: 'Request failed', details: error.message })
+  }
+})
+
+// =============================================================================
+// FEEDBACK ALERT ENDPOINT
+// Receives user feedback and sends alerts to Telegram
+// Expects: { rating: Number (1-5), comment: String (optional) }
+// =============================================================================
+app.post('/feedback-alert', async (req, res) => {
+  try {
+    const { rating, comment } = req.body
+
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({ success: false, error: 'Invalid rating (must be 1-5)' })
+    }
+
+    // Check if Telegram is configured
+    if (!telegramBotKey || !channelId) {
+      console.log('⚠️ Telegram not configured, skipping feedback alert')
+      return res.json({ success: true, message: 'Feedback received (Telegram not configured)' })
+    }
+
+    // Build the Telegram message
+    const starEmoji = '⭐'.repeat(rating)
+    const emptyStars = '☆'.repeat(5 - rating)
+    
+    let ratingLabel
+    switch (rating) {
+      case 1: ratingLabel = '😞 Poor'; break
+      case 2: ratingLabel = '😕 Could be better'; break
+      case 3: ratingLabel = '😐 Okay'; break
+      case 4: ratingLabel = '😊 Good'; break
+      case 5: ratingLabel = '🤩 Amazing'; break
+      default: ratingLabel = ''
+    }
+
+    let message = `📱 Wicked App Feedback\n\n`
+    message += `${starEmoji}${emptyStars} (${rating}/5)\n`
+    message += `${ratingLabel}\n`
+    
+    if (comment && comment.trim()) {
+      message += `\n💬 Comment:\n"${comment.trim()}"`
+    }
+    
+    message += `\n\n🕐 ${new Date().toLocaleString('en-US', { timeZone: 'UTC' })} UTC`
+
+    // Send to Telegram
+    sendTelegram(message)
+
+    console.log(`📨 Feedback alert sent: ${rating}/5 stars${comment ? ' with comment' : ''}`)
+
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Feedback alert endpoint error:', error)
+    res.status(500).json({ success: false, error: 'Failed to send feedback alert' })
   }
 })
 
