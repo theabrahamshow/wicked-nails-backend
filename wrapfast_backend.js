@@ -318,7 +318,7 @@ async function getUserCreditsInfo(userId) {
       creditsTotal: totalCredits,
       subscriptionStatus: usage.isSubscribed ? 'active' : 'none',
       subscriptionType: usage.subscriptionType,
-      resetsAt: usage.isSubscribed ? getNextWeekStart() : null,
+      resetsAt: usage.isSubscribed ? usage.expiresAt : null, // Use actual subscription renewal date from RevenueCat
       demoUsed: usage.demoUsed
     }
   } catch (error) {
